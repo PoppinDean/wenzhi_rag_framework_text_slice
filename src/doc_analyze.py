@@ -677,7 +677,7 @@ class DocAnalyze:
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
                 for line in f.readlines():
-                    text += line.strip()
+                    text = line.strip()
                     if text == '':  # 如果段落为空，跳过
                         continue
                     if first_line_flag:
