@@ -1,10 +1,10 @@
 '''
 Author: Dean
 Date: 2023-11-18 21:03:56
-LastEditTime: 2023-12-09 18:00:04
+LastEditTime: 2024-06-30 20:12:55
 LastEditors: your name
 Description: 
-FilePath: \python\machine_learning\multi_chat\multi_doc_to_emb.py
+FilePath: \python\wenzhi_rag_framework_text_slice\src\doc_analyze.py
 可以输入预定的版权声明、个性签名、空行等
 '''
 from datetime import datetime
@@ -36,7 +36,7 @@ import pdfplumber
 # from chinese_splitter import ChineseRecursiveTextSplitter
 from splitter_overlap import RecursiveTextSplitter
 
-model_path = 'model/tao-8k'
+model_path = r'..\..\machine_learning\layered_plus_ques_rag\model\tao-8k'
 special_symbol = ['\n', '\r', '!', '@', '#', '$', '%', '^', '&', '*', '_', '+', '=', '`', '~', '[', ']', '{', '}', '\\', '|', ';', ':', ',', '<',  '>', '/', '?', '！', '￥', '…', '—', '【', '】', '：', '，', '。', '？', '～']
 sentense_symbol_chinese = ['\n', '。', '！', '?', '？', '；', ';']
 sentense_symbol_none_chinese = ['\n', '.', '!', '?', ';']
@@ -151,6 +151,22 @@ def symbol_split(text, language = 'ch'):
         sentenses.append(sentense)
     return sentenses
 
+def get_potential_sentenses(text, language = 'ch', chunk_length = 512):
+    paragraphs = [sub for big in text.split('\n\n') for sub in (big.split('\n') if len(big) >= chunk_length else [big])]
+    sentenses = []
+    for p in paragraphs:
+        if len(p) < chunk_length:
+            if p.strip() != '':
+                sentenses.append(p)
+        else:
+            for s in symbol_split(p, language):
+                if len(s) < chunk_length:
+                    if s.strip() != '':
+                        sentenses.append(s)
+                else:
+                    sentenses.extend(slice_text(s, chunk_length, overlap = 0))
+    return sentenses
+
 def semantic_split(text, language = 'ch', chunk_length = 512, overlap = 96, threshold = 0.4):
     """
     根据语义分割文本
@@ -161,14 +177,7 @@ def semantic_split(text, language = 'ch', chunk_length = 512, overlap = 96, thre
     :param threshold: 语义相似度阈值
     :return: 分割后的文本列表
     """
-    Paragraphs = text.split('\n')
-    sentenses_ori = [s for p in Paragraphs for s in symbol_split(p, language) if s]
-    sentenses = []
-    for s in sentenses_ori:
-        if len(s) < chunk_length:
-            sentenses.append(s)
-        else:
-            sentenses.extend(slice_text(s, chunk_length, overlap = 0))
+    sentenses = get_potential_sentenses(text, language, chunk_length)
     embs = emb_model.encode(sentenses)
     embs_score = []
     for i in range(len(embs) - 1):
@@ -259,22 +268,74 @@ def special_symbol_last_remove(text):
         text = text[:-1]
     return text
 
+def letter_to_number(letter):
+    if 'a' <= letter <= 'z':
+        return 'letter_lower', ord(letter.lower()) - 96
+    return 'letter_upper', ord(letter.lower()) - 96
+
+def chinese_to_arabic(chinese):
+    chinese_arabic_map = {
+        '零': '0',
+        '〇': '0',
+        '一': '1',
+        '二': '2',
+        '三': '3',
+        '四': '4',
+        '五': '5',
+        '六': '6',
+        '七': '7',
+        '八': '8',
+        '九': '9',
+        '十': '10'
+    }
+    for key in chinese_arabic_map:
+        chinese = chinese.replace(key, chinese_arabic_map[key])
+    return chinese
+
 def numbered_headings(text):
-    passible = re.finditer(r'([\(（ \t^]*[ 零〇一二三四五六七八九十]+\s*[、\.）\)]?\s*[^:：——；;\n、$，a-zA-Z\d]*|[\(（ \t^]*[\d]+\s*[\.\)）]?\s*[^:：——；;\n、$]*|[\(（ \t^]*[a-zA-Z]+\s*[\.\)]?\s*[^:：——；;\n、$]*|[#]*.*)[$:：——:;\n]', text)
+    passible = re.finditer(r'([\(（ \t^]*[ 零〇一二三四五六七八九十]+\s*[、\.）\)]+\s*[^:：——；;\n、$，a-zA-Z\d]*|[\(（ \t^]*[\d]+\s*[、\.\)）]+\s*[^:：——；;\n、$]*|[\(（ \t^]*[a-zA-Z]+\s*[\.\)]+\s*[^:：——；;\n、$]*|[#]+.*)[$:：——:;\n]', text)
     final = []
+    pattern = r'''
+    (?P<type>
+        [\(\（ \t^]*
+        (?P<number>[零〇一二三四五六七八九十\d]+|[a-zA-Z]+)
+        \s*
+        (?P<separator>[、\.）\)]?)
+    )
+    \s*
+    [^:：——；;\n、$，a-zA-Z\d]*
+    |
+    (?P<other>[#]*.*)
+    [$:：——:;\n]
+    '''
     for item in passible:
         text = special_symbol_last_remove(item.group())
         
-        if all(j not in text for j in special_symbol) and not str.isalnum(text) and not is_float(text) and len(text) > 1:  
+        if all(j not in text for j in special_symbol) and not str.isalnum(text) and not is_float(text) and len(text) > 1:
+            match = re.match(pattern, text, re.VERBOSE)
+            if match:
+                details = match.groupdict()
+                number = details['number']
+                if re.match(r'[零〇一二三四五六七八九十]+', number):
+                    style = 'chinese'
+                    number = chinese_to_arabic(number)
+                elif re.match(r'\d+', number):
+                    style = 'arabic'
+                    number = int(number)
+                elif re.match(r'[a-zA-Z]+', number):
+                    style, number = letter_to_number(str(number)[0])
+                else:
+                    style = 'none'
+                    number = -1
             final.append({
                 'text': text,
                 'start': item.start(),
                 'end': item.end(),
+                'number': number,
+                'style' : style,
+                'separator': details['separator'] if 'separator' in details else ''
             })
     return final
-print(numbered_headings('1. 测试\nsahdoihaoidso\n（2)sdhoi\n'))
-print(numbered_headings('一、基本情况'))
-
 
 def judge_eng(text):
     def is_special(char: str) -> bool:
@@ -298,7 +359,7 @@ def judge_eng(text):
     else:
         return 'none'
 
-def add_section(section, texts, headings, file_name, file_type, chunk_size_limit=512, overlap=96, language='ch') -> list:
+def add_section(section, texts, headings, file_name, file_type, chunk_size_limit=512, overlap=96, language='ch', info_type='txt', table_one_line = True) -> list:
     """
     添加一个章节的文本到文本列表
     :param section: 章节文本
@@ -311,8 +372,29 @@ def add_section(section, texts, headings, file_name, file_type, chunk_size_limit
     :param language: 语言
     :return: list
     """
+    if info_type == 'table': 
+        sentenses = [p for p in section.split('\n\n') if p.strip() != ''] if table_one_line else get_potential_sentenses(section, language, chunk_size_limit)
+        for s in sentenses:
+            texts.append({
+                "content":s,
+                "time": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                "file_name": file_name,
+                "file_type": file_type,
+                "chunk_id": f'{uuid4().hex}_chunk',
+                "chunk_size": len(s),
+                "headings": headings,
+                "parent": "",
+                "child":[],
+                "other meta": {
+                    "is_table": True,
+                    "is_image": False,
+                    "table_info": True,
+                    "image_info": False
+                }
+            })
+        return texts
     headings_of_section_upper = []
-    headings_of_section_lower = numbered_headings(section)
+    headings_of_section_lower = numbered_headings(section + '\n') if info_type == 'txt' else []
     if len(section) < chunk_size_limit:
         chunk_id = f'{uuid4().hex}_chunk'
         
@@ -327,7 +409,9 @@ def add_section(section, texts, headings, file_name, file_type, chunk_size_limit
                 level = headings[i]['level']
     headings_of_section_upper = headings_of_section_upper[::-1]
     child = []
+    add_already = False
     if len(headings_of_section_lower) > 0:
+        add_already = True
         for i in range(len(headings_of_section_lower)):
             start = headings_of_section_lower[i]['end']
             end = headings_of_section_lower[i + 1]['start']if i + 1 < len(headings_of_section_lower) else len(section)
@@ -355,8 +439,8 @@ def add_section(section, texts, headings, file_name, file_type, chunk_size_limit
                         "other meta": {
                             "is_table": False,
                             "is_image": False,
-                            "table_info": None,
-                            "image_info": None
+                            "table_info": None if info_type != 'table' else True,
+                            "image_info": None if info_type != 'image' else True
                         }
                     })
             else:
@@ -379,8 +463,8 @@ def add_section(section, texts, headings, file_name, file_type, chunk_size_limit
                     "other meta": {
                         "is_table": False,
                         "is_image": False,
-                        "table_info": None,
-                        "image_info": None
+                        "table_info": None if info_type != 'table' else True,
+                        "image_info": None if info_type != 'image' else True
                     }
                 })
     if len(section) < chunk_size_limit:
@@ -397,10 +481,34 @@ def add_section(section, texts, headings, file_name, file_type, chunk_size_limit
             "other meta":{
                 "is_table": False,
                 "is_image": False,
-                "table_info": None,
-                "image_info": None
+                "table_info": None if info_type != 'table' else True,
+                "image_info": None if info_type != 'image' else True
             }
         })
+    elif add_already == False:
+        chunks = semantic_split(section, language, chunk_size_limit, overlap)
+        for chunk in chunks:
+            lil_chunk_id = f'{uuid4().hex}_chunk'
+            child.append(lil_chunk_id)
+            headings_chunk = headings_of_section_upper.copy()
+            texts.append({
+                "content":chunk,
+                "time": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                "file_name": file_name,
+                "file_type": file_type,
+                "chunk_id": lil_chunk_id,
+                "chunk_size": len(chunk),
+                "headings": headings_chunk,
+                "parent": "",
+                "child":[],
+                "other meta": {
+                    "is_table": False,
+                    "is_image": False,
+                    "table_info": None if info_type != 'table' else True,
+                    "image_info": None if info_type != 'image' else True
+                }
+            })
+
     return texts
 
 class DocAnalyze:
@@ -409,7 +517,7 @@ class DocAnalyze:
     
     # Rest of your code... 
     
-    def read_doc(self, file_path, chunk_size=512, overlap=96):
+    def read_doc(self, file_path, chunk_size=512, overlap=96, table_one_line=True):
         """
         读取 doc 和 docx 文件
         :param file_path: 文件路径
@@ -442,24 +550,45 @@ class DocAnalyze:
                     if para.style.name.startswith('Heading') or (len(extracted_headings) == 1 and extracted_headings[0]['text'] == special_symbol_last_remove(para.text)):
                         if para.style.name.startswith('Heading'):
                             level = int(para.style.name.split(' ')[-1])
+                            style = 'Heading'
+                            number = 'none'
+                            separator = 'none'
                         else:
+                            extracted_heading = extracted_headings[0]
                             if headings:
-                                level = headings[-1]['level'] + 1
+                                # 提取标题类型，可能是1）或者1.或者1、或是一、等等
+                                flag = False
+                                for i in range(len(headings) - 1, -1, -1):
+                                    if headings[i]['style'] == extracted_heading['style'] and headings[i]['separator'] == extracted_heading['separator'] and headings[i]['number'] == extracted_heading['number'] - 1:
+                                        level = headings[i]['level']
+                                        flag = True
+                                        break
+                                if not flag:
+                                    level = headings[-1]['level'] + 1
                             else:
                                 level = 1
+                            number = extracted_heading['number']
+                            style = extracted_heading['style']
+                            separator = extracted_heading['separator']
                         if section != '':
                             add_section(section, texts, headings, file_path, 'docx', chunk_size, overlap, language)
                             section = ''
                         headings.append({
                             'text': special_symbol_last_remove(para.text),
-                            'level': level
+                            'level': level,
+                            'style': style,
+                            'number' : number,
+                            'separator' : separator,
                         })
                     elif title == '':
                         if len(para.text) < 20:
                             title = True
                             headings.append({
                                 'text': para.text,
-                                'level': 0
+                                'level': 0,
+                                'style': 'Title',
+                                'number' : 'none',
+                                'separator' : 'none',
                             })
                         else:
                             title = False
@@ -471,19 +600,27 @@ class DocAnalyze:
             # 如果元素是表格
             elif isinstance(element, CT_Tbl):
                 if section:
-                    text += section.strip('\n') + '\n\n'
+                    add_section(section, texts, headings, file_path, 'docx', chunk_size, overlap, language)
                     section = ''
                 # 读取每一个表格的文本
                 table = Table(element, doc)
                 ceil_set = set()
+                first_row = True
+                titles_of_table = []
                 for row in table.rows:
-                    for cell in row.cells:
-                        if cell in ceil_set:
-                            continue
+                    if first_row:
+                        for cell in row.cells:
+                            titles_of_table.append(cell.text.strip('\n'))
+                        first_row = False
+                        continue
+                    for i, cell in enumerate(row.cells):
                         ceil_set.add(cell)
-                        text += cell.text.strip('\n') + ','
-                    text += '\n'
-                text += '\n\n'
+                        cell_text = cell.text.replace('\n', '')
+                        section +=f"{titles_of_table[i]}:{cell_text}\n"
+                    section += '\n\n'
+                if section:
+                    add_section(section, texts, headings, file_path, 'docx', chunk_size, overlap, language, 'table', table_one_line)
+                    section = ''
         if section:
             add_section(section, texts, headings, file_path, 'docx', chunk_size, overlap, language)
         return texts
@@ -529,30 +666,80 @@ class DocAnalyze:
                         text += line_text.strip('\n') + '\n\n'
         return text
 
-    def read_txt(self, file_path):
+    def read_txt(self, file_path, chunk_size=512, overlap=96):
         """
         读取 txt 或 md 文件
         :param file_path: 文件路径
         :return: 文本
         """
-        text = ''
-        with open(file_path, 'r', encoding='utf-8') as f:
-            text += f.read()
+        texts = []
+        headings = []
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                for line in f.readlines():
+                    text += line.strip()
+                    if text == '':  # 如果段落为空，跳过
+                        continue
+                    if first_line_flag:
+                        language = judge_eng(text)
+                        title = ''
+                        first_line_flag = False
+                    extracted_headings = numbered_headings(text + '\n')
+                    if len(extracted_headings) == 1 and extracted_headings[0]['text'] == special_symbol_last_remove(text):
+                        extracted_heading = extracted_headings[0]
+                        if headings:
+                            # 提取标题类型，可能是1）或者1.或者1、或是一、等等
+                            flag = False
+                            for i in range(len(headings) - 1, -1, -1):
+                                if headings[i]['style'] == extracted_heading['style'] and headings[i]['separator'] == extracted_heading['separator'] and headings[i]['number'] == extracted_heading['number'] - 1:
+                                    level = headings[i]['level']
+                                    flag = True
+                                    break
+                            if not flag:
+                                level = headings[-1]['level'] + 1
+                        else:
+                            level = 1
+                        number = extracted_heading['number']
+                        style = extracted_heading['style']
+                        separator = extracted_heading['separator']
+                        if section != '':
+                            add_section(section, texts, headings, file_path, 'docx', chunk_size, overlap, language)
+                            section = ''
+                        headings.append({
+                            'text': special_symbol_last_remove(text),
+                            'level': level,
+                            'style': style,
+                            'number' : number,
+                            'separator' : separator,
+                        })
+                    elif title == '':
+                        if len(text) < 20:
+                            title = True
+                            headings.append({
+                                'text': text,
+                                'level': 0,
+                                'style': 'Title',
+                                'number' : 'none',
+                                'separator' : 'none',
+                            })
+                        else:
+                            title = False
+                    else:
+                        section += text.strip('\n') + '\n'
+            if section:
+                add_section(section, texts, headings, file_path, 'docx', chunk_size, overlap, language)
+        except Exception as e:
+            print(e)
+            pass
         return text
 
 
-    def analyze_doc(self, file, chunk_size=512, overlap=96):
+    def analyze_doc(self, file, chunk_size=512, overlap=96, table_one_line=True):
         """
         分析文档
         :param path: 文档路径
         :return: None
         """
-        chunk_splitter = RecursiveTextSplitter(
-            keep_separator=True,
-            is_separator_regex=True,
-            chunk_size=chunk_size,
-            chunk_overlap=overlap
-        )
         print(file)
         texts = []
         file_path = file
@@ -562,18 +749,22 @@ class DocAnalyze:
             if file_type == 'pdf':
                 texts = self.read_pdf(file_path)
             elif file_type == 'doc' or file_type == 'docx':
-                texts = self.read_doc(file_path)
+                texts = self.read_doc(file_path, chunk_size, overlap, table_one_line)
             elif file_type == 'txt' or file_type == 'md':
-                texts = self.read_txt(file_path)
+                texts = self.read_txt(file_path, chunk_size, overlap)
         except Exception as e:
             print(e)
         return texts
 
 if __name__ == '__main__':
-    # print(numbered_headings('1. 测试\nsahdoihaoidso'))
+    # print(numbered_headings('1. 测试\nsahdoihaoidso\n（2)sdhoi\n'))
+    # print(numbered_headings('一、基本情况\n'))
+    # print(numbered_headings('a)基本情况\n'))
+    # print(numbered_headings('1、火灾现场处置方案\n'))
+
     time = datetime.now()
     doc_analyze = DocAnalyze()
-    chunks = doc_analyze.analyze_doc(r'..\data\01test.docx')
+    chunks = doc_analyze.analyze_doc(r'..\data\现场处置方案(1) - 简略版.docx')
     used_time = datetime.now() - time
     print(used_time)
     with open('../data/chunks.json', 'w', encoding='utf-8') as f:
