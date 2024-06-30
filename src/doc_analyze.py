@@ -372,27 +372,6 @@ def add_section(section, texts, headings, file_name, file_type, chunk_size_limit
     :param language: 语言
     :return: list
     """
-    if info_type == 'table': 
-        sentenses = [p for p in section.split('\n\n') if p.strip() != ''] if table_one_line else get_potential_sentenses(section, language, chunk_size_limit)
-        for s in sentenses:
-            texts.append({
-                "content":s,
-                "time": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                "file_name": file_name,
-                "file_type": file_type,
-                "chunk_id": f'{uuid4().hex}_chunk',
-                "chunk_size": len(s),
-                "headings": headings,
-                "parent": "",
-                "child":[],
-                "other meta": {
-                    "is_table": True,
-                    "is_image": False,
-                    "table_info": True,
-                    "image_info": False
-                }
-            })
-        return texts
     headings_of_section_upper = []
     headings_of_section_lower = numbered_headings(section + '\n') if info_type == 'txt' else []
     if len(section) < chunk_size_limit:
@@ -408,6 +387,27 @@ def add_section(section, texts, headings, file_name, file_type, chunk_size_limit
                 headings_of_section_upper.append(headings[i])
                 level = headings[i]['level']
     headings_of_section_upper = headings_of_section_upper[::-1]
+    if info_type == 'table': 
+        sentenses = [p for p in section.split('\n\n') if p.strip() != ''] if table_one_line else get_potential_sentenses(section, language, chunk_size_limit)
+        for s in sentenses:
+            texts.append({
+                "content":s,
+                "time": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                "file_name": file_name,
+                "file_type": file_type,
+                "chunk_id": f'{uuid4().hex}_chunk',
+                "chunk_size": len(s),
+                "headings": headings_of_section_upper,
+                "parent": "",
+                "child":[],
+                "other meta": {
+                    "is_table": True,
+                    "is_image": False,
+                    "table_info": True,
+                    "image_info": False
+                }
+            })
+        return texts
     child = []
     add_already = False
     if len(headings_of_section_lower) > 0:
