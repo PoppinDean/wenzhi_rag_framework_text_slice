@@ -731,7 +731,7 @@ class DocAnalyze:
         except Exception as e:
             print(e)
             pass
-        return text
+        return texts
 
 
     def analyze_doc(self, file, chunk_size=512, overlap=96, table_one_line=True):
