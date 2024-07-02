@@ -1,7 +1,7 @@
 '''
 Author: Dean
 Date: 2023-11-18 21:03:56
-LastEditTime: 2024-06-30 20:12:55
+LastEditTime: 2024-07-03 01:11:09
 LastEditors: your name
 Description: 
 FilePath: \python\wenzhi_rag_framework_text_slice\src\doc_analyze.py
@@ -293,17 +293,25 @@ def chinese_to_arabic(chinese):
     return chinese
 
 def numbered_headings(text):
-    passible = re.finditer(r'([\(（ \t^]*[ 零〇一二三四五六七八九十]+\s*[、\.）\)]+\s*[^:：——；;\n、$，a-zA-Z\d]*|[\(（ \t^]*[\d]+\s*[、\.\)）]+\s*[^:：——；;\n、$]*|[\(（ \t^]*[a-zA-Z]+\s*[\.\)]+\s*[^:：——；;\n、$]*|[#]+.*)[$:：——:;\n]', text)
+    passible = re.finditer(r'(第[\d]+[章节]\s*[^:：——；;\n、$，]|第[零〇一二三四五六七八九十]+[章节]\s*[^:：——；;\n、$，]|[\(（ \t^]*[零〇一二三四五六七八九十]+\s*[、\.）\)]+\s*[^:：——；;\n、$，]*|[\(（ \t^]*[\d]+\s*[、\.\)）]+\s*[^:：——；;\n、$]*|[\(（ \t^]*[a-zA-Z]+\s*[\.\)]+\s*[^:：——；;\n、$]*|[#]+.*)[$:：——:;\n]', text)
     final = []
     pattern = r'''
     (?P<type>
+        第
+        (?P<number>[\d]+|[零〇一二三四五六七八九十]+)
+         (?P<separator>[章节条])
+        \s*
+        [^:：——；;\n、$，]*
+    )
+    |
+    (
         [\(\（ \t^]*
-        (?P<number>[零〇一二三四五六七八九十\d]+|[a-zA-Z]+)
+        (?P<number_2>[零〇一二三四五六七八九十\d]+|[a-zA-Z]+)
         \s*
         (?P<separator>[、\.）\)]?)
+        \s*
+        [^:：——；;\n、$，a-zA-Z\d]*
     )
-    \s*
-    [^:：——；;\n、$，a-zA-Z\d]*
     |
     (?P<other>[#]*.*)
     [$:：——:;\n]
@@ -316,17 +324,30 @@ def numbered_headings(text):
             if match:
                 details = match.groupdict()
                 number = details['number']
+                number_type = details['type']
                 if re.match(r'[零〇一二三四五六七八九十]+', number):
                     style = 'chinese'
-                    number = chinese_to_arabic(number)
+                    if number_type == '第':
+                        style += '_chapter'
+                    number = [int(chinese_to_arabic(number))]
                 elif re.match(r'\d+', number):
                     style = 'arabic'
-                    number = int(number)
+                    if number_type == '第':
+                        style += '_chapter'
+                        number = [int(number)]
+                    else:
+                        combined = re.findall(r'[\d]+[\d\.]+', text)
+                        if combined:
+                            number = [int(num) for num in combined[0].split('.') if num != '']
+                            style += '_combined'
+                        else:
+                            number = [int(number)]
                 elif re.match(r'[a-zA-Z]+', number):
                     style, number = letter_to_number(str(number)[0])
+                    number = [number]
                 else:
                     style = 'none'
-                    number = -1
+                    number = [-1]
             final.append({
                 'text': text,
                 'start': item.start(),
@@ -377,10 +398,9 @@ def add_section(section, texts, headings, file_name, file_type, chunk_size_limit
     if len(section) < chunk_size_limit:
         chunk_id = f'{uuid4().hex}_chunk'
         
-    current_level = 0
     if len(headings) > 0:
         current_heading = headings[-1]
-        current_level = level = current_heading['level']
+        level = current_heading['level']
         headings_of_section_upper.append(current_heading)
         for i in range((len(headings) - 1), -1, -1):
             if headings[i]['level'] < level:
@@ -403,7 +423,7 @@ def add_section(section, texts, headings, file_name, file_type, chunk_size_limit
                 "other meta": {
                     "is_table": True,
                     "is_image": False,
-                    "table_info": True,
+                    "table_info": section,
                     "image_info": False
                 }
             })
@@ -422,9 +442,27 @@ def add_section(section, texts, headings, file_name, file_type, chunk_size_limit
                     lil_chunk_id = f'{uuid4().hex}_chunk'
                     child.append(lil_chunk_id)
                     headings_chunk = headings_of_section_upper.copy()
+                    if headings_chunk:
+                        # 提取标题类型，可能是1）或者1.或者1、或是一、等等
+                        flag = False
+                        for j in range(len(headings_chunk) - 1, -1, -1):
+                            if headings_chunk[j]['style'] == headings_of_section_lower[i]['style'] and headings_chunk[j]['separator'] == headings_of_section_lower[i]['separator'] and headings_chunk[j]['number'][-1] == headings_of_section_lower[i]['number'][-1] - 1:
+                                if headings_chunk[j]['style'] == 'arabic_combined':
+                                    if len(headings_chunk[j]['number']) != len(headings_of_section_lower[i]['number']) or any(headings_chunk[j]['number'][k] != headings_of_section_lower[i]['number'][k]  for k in range(len(headings_chunk[j]['number'] - 1))):
+                                        continue
+                                level = headings_chunk[j]['level']
+                                flag = True
+                                break
+                        if not flag:
+                            level = headings_chunk[-1]['level'] + 1
+                    else:
+                        level = 1
                     headings_chunk.append({
                         "text": headings_of_section_lower[i]['text'],
-                        "level": current_level + 1
+                        "level": level,
+                        "style": headings_of_section_lower[i]['style'],
+                        "number": headings_of_section_lower[i]['number'],
+                        "separator": headings_of_section_lower[i]['separator']
                     })
                     texts.append({
                         "content":chunk,
@@ -446,9 +484,24 @@ def add_section(section, texts, headings, file_name, file_type, chunk_size_limit
             else:
                 lil_chunk_id = f'{uuid4().hex}_chunk'
                 headings_chunk = headings_of_section_upper.copy()
+                if headings_chunk:
+                    # 提取标题类型，可能是1）或者1.或者1、或是一、等等
+                    flag = False
+                    for j in range(len(headings_chunk) - 1, -1, -1):
+                        if headings_chunk[j]['style'] == headings_of_section_lower[i]['style'] and headings_chunk[j]['separator'] == headings_of_section_lower[i]['separator'] and headings_chunk[j]['number'][-1] == headings_of_section_lower[i]['number'][-1] - 1:
+                            level = headings_chunk[j]['level']
+                            flag = True
+                            break
+                    if not flag:
+                        level = headings_chunk[-1]['level'] + 1
+                else:
+                    level = 1
                 headings_chunk.append({
                     "text": headings_of_section_lower[i]['text'],
-                    "level": current_level + 1
+                    "level": level,
+                    "style": headings_of_section_lower[i]['style'],
+                    "number": headings_of_section_lower[i]['number'],
+                    "separator": headings_of_section_lower[i]['separator']
                 })
                 texts.append({
                     "content":block,
@@ -463,8 +516,8 @@ def add_section(section, texts, headings, file_name, file_type, chunk_size_limit
                     "other meta": {
                         "is_table": False,
                         "is_image": False,
-                        "table_info": None if info_type != 'table' else True,
-                        "image_info": None if info_type != 'image' else True
+                        "table_info": None,
+                        "image_info": None
                     }
                 })
     if len(section) < chunk_size_limit:
@@ -504,8 +557,8 @@ def add_section(section, texts, headings, file_name, file_type, chunk_size_limit
                 "other meta": {
                     "is_table": False,
                     "is_image": False,
-                    "table_info": None if info_type != 'table' else True,
-                    "image_info": None if info_type != 'image' else True
+                    "table_info": None,
+                    "image_info": None
                 }
             })
 
@@ -547,11 +600,11 @@ class DocAnalyze:
                         title = ''
                         first_line_flag = False
                     extracted_headings = numbered_headings(para.text + '\n')
-                    if para.style.name.startswith('Heading') or (len(extracted_headings) == 1 and extracted_headings[0]['text'] == special_symbol_last_remove(para.text)):
+                    if para.style.name.startswith('Heading') or (len(extracted_headings) == 1 and special_symbol_last_remove(para.text.strip()).startswith(extracted_headings[0]['text'])):
                         if para.style.name.startswith('Heading'):
                             level = int(para.style.name.split(' ')[-1])
                             style = 'Heading'
-                            number = 'none'
+                            number = [-1]
                             separator = 'none'
                         else:
                             extracted_heading = extracted_headings[0]
@@ -559,7 +612,7 @@ class DocAnalyze:
                                 # 提取标题类型，可能是1）或者1.或者1、或是一、等等
                                 flag = False
                                 for i in range(len(headings) - 1, -1, -1):
-                                    if headings[i]['style'] == extracted_heading['style'] and headings[i]['separator'] == extracted_heading['separator'] and headings[i]['number'] == extracted_heading['number'] - 1:
+                                    if headings[i]['style'] == extracted_heading['style'] and headings[i]['separator'] == extracted_heading['separator'] and headings[i]['number'][-1] == extracted_heading['number'][-1] - 1:
                                         level = headings[i]['level']
                                         flag = True
                                         break
@@ -567,19 +620,19 @@ class DocAnalyze:
                                     level = headings[-1]['level'] + 1
                             else:
                                 level = 1
-                            number = extracted_heading['number']
                             style = extracted_heading['style']
                             separator = extracted_heading['separator']
-                        if section != '':
-                            add_section(section, texts, headings, file_path, 'docx', chunk_size, overlap, language)
-                            section = ''
+                            number = extracted_heading['number']
                         headings.append({
-                            'text': special_symbol_last_remove(para.text),
+                            'text': extracted_heading['text'],
                             'level': level,
                             'style': style,
                             'number' : number,
                             'separator' : separator,
                         })
+                        if section != '':
+                            add_section(section, texts, headings, file_path, 'docx', chunk_size, overlap, language)
+                            section = ''
                     elif title == '':
                         if len(para.text) < 20:
                             title = True
@@ -587,7 +640,7 @@ class DocAnalyze:
                                 'text': para.text,
                                 'level': 0,
                                 'style': 'Title',
-                                'number' : 'none',
+                                'number' : [-1],
                                 'separator' : 'none',
                             })
                         else:
@@ -623,7 +676,7 @@ class DocAnalyze:
                     section = ''
         if section:
             add_section(section, texts, headings, file_path, 'docx', chunk_size, overlap, language)
-        return texts
+        return texts,headings
 
     def read_pdf(self, file_path):
         """
@@ -719,7 +772,7 @@ class DocAnalyze:
                                 'text': text,
                                 'level': 0,
                                 'style': 'Title',
-                                'number' : 'none',
+                                'number' : [-1],
                                 'separator' : 'none',
                             })
                         else:
@@ -742,6 +795,7 @@ class DocAnalyze:
         """
         print(file)
         texts = []
+        headings = []
         file_path = file
         file_name = os.path.basename(file_path)
         file_type = file_name.split('.')[-1]
@@ -749,12 +803,12 @@ class DocAnalyze:
             if file_type == 'pdf':
                 texts = self.read_pdf(file_path)
             elif file_type == 'doc' or file_type == 'docx':
-                texts = self.read_doc(file_path, chunk_size, overlap, table_one_line)
+                texts, headings = self.read_doc(file_path, chunk_size, overlap, table_one_line)
             elif file_type == 'txt' or file_type == 'md':
-                texts = self.read_txt(file_path, chunk_size, overlap)
+                texts, headings = self.read_txt(file_path, chunk_size, overlap)
         except Exception as e:
             print(e)
-        return texts
+        return texts, headings
 
 if __name__ == '__main__':
     # print(numbered_headings('1. 测试\nsahdoihaoidso\n（2)sdhoi\n'))
@@ -764,8 +818,10 @@ if __name__ == '__main__':
 
     time = datetime.now()
     doc_analyze = DocAnalyze()
-    chunks = doc_analyze.analyze_doc(r'..\data\现场处置方案(1) - 简略版.docx')
+    chunks,headings = doc_analyze.analyze_doc(r'..\data\01塘南圩区.docx')
     used_time = datetime.now() - time
     print(used_time)
     with open('../data/chunks.json', 'w', encoding='utf-8') as f:
         json.dump(chunks, f, ensure_ascii=False, indent=4)
+    with open('../data/headings.json', 'w', encoding='utf-8') as f:
+        json.dump(headings, f, ensure_ascii=False, indent=4)
